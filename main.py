@@ -1,356 +1,348 @@
 #!/usr/bin/env python3
-"""Draw a newspaper front page summing up the world news of Friday
-27 November 2026 and write it to /output/entry.png.
+"""Draw the front page of THE WORLD TODAY for Friday 27 November 2026.
 
-Pure stdlib + Pillow, no network, fully deterministic: fixed layout,
-fixed palette, no randomness, no timestamps.
-
-Stories (verified against live news reporting on 27 Nov 2026):
-- Thanksgiving nor'easter slams the US East Coast; the 100th Macy's
-  parade is postponed to Saturday, the first weather postponement in
-  its history; power out for 250,000+ customers.
-- Zelenskyy warns Russia is preparing a new massive strike on
-  Ukraine's power grid; EU leaders split over a 45bn euro loan.
-- Explosion and fire at Bangkok's Bangchak refinery: 9 injured,
-  three critically; all units shut down.
-- Two Italian technicians killed in a drone attack in Kuwait blamed
-  on Iran (Tehran denies it); a tanker fire near Cairo kills 31.
-- The US proposes tariffs of up to 35% on Vietnamese goods, falling
-  to 20% if a trade deal is struck.
-- New Zealand's final election count is due; the centre-right
-  coalition leads 67 of 131 seats on the preliminary tally.
-- Sport: Steelers release Aaron Rodgers; Jannik Sinner is out of the
-  Australian Open after knee surgery.
+A single 1024x1024 newspaper page: masthead, dateline, one lead story with
+a storm illustration, four smaller stories in two columns, and a footer
+strip with the New Zealand count and the day's sport. Pillow only, no
+network, no randomness, no clock: the same input always paints the same
+bytes. The output directory comes from MAKEFUN_OUTPUT_DIR (default /output).
 """
 
 import os
+
 from PIL import Image, ImageDraw, ImageFont
 
-W, H = 1024, 1024
+PAGE = 1024
+MARGIN = 24
+PAPER = (247, 241, 227)
+INK = (24, 24, 28)
+NAVY = (20, 33, 61)
+GOLD = (201, 162, 39)
+RED = (163, 22, 33)
+RULE = (60, 55, 48)
+FAINT = (120, 112, 96)
 
-PAPER = (248, 243, 232)
-INK = (24, 24, 24)
-NAVY = (20, 33, 58)
-NAVY2 = (44, 62, 96)
-RED = (172, 36, 24)
-GOLD = (198, 158, 38)
-SLATE = (58, 74, 99)
-BODY = (62, 62, 58)
-FAINT = (188, 184, 170)
-
-_HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def font(name, size):
-    """Load a bundled DejaVu font, falling back to the system copy."""
-    for path in (
-        os.path.join(_HERE, "fonts", name),
-        os.path.join("/usr/share/fonts/truetype/dejavu", name),
-    ):
-        try:
-            return ImageFont.truetype(path, size)
-        except OSError:
-            continue
-    return ImageFont.load_default(size)
+def load_font(name, size):
+    path = os.path.join(HERE, "fonts", name)
+    return ImageFont.truetype(path, size)
 
 
-def serif_b(size):
-    return font("DejaVuSerif-Bold.ttf", size)
+class Type:
+    """The page's typefaces, loaded once."""
+
+    def __init__(self):
+        self.serif = lambda s: load_font("DejaVuSerif-Bold.ttf", s)
+        self.sans = lambda s: load_font("DejaVuSans.ttf", s)
+        self.sans_b = lambda s: load_font("DejaVuSans-Bold.ttf", s)
 
 
-def sans_b(size):
-    return font("DejaVuSans-Bold.ttf", size)
+class Page:
+    """A blank sheet plus a cursor that walks down it."""
 
+    def __init__(self):
+        self.img = Image.new("RGB", (PAGE, PAGE), PAPER)
+        self.d = ImageDraw.Draw(self.img)
+        self.y = 0
+        self.t = Type()
 
-def sans(size):
-    return font("DejaVuSans.ttf", size)
+    def rule(self, x0, x1, y, width=2, colour=RULE):
+        self.d.line([(x0, y), (x1, y)], fill=colour, width=width)
 
-
-def wrap_text(d, text, f, width):
-    """Greedy word wrap; returns a list of lines fitting width."""
-    lines, cur = [], ""
-    for word in text.split():
-        trial = (cur + " " + word).strip()
-        if d.textlength(trial, font=f) <= width or not cur:
-            cur = trial
-        else:
+    def wrapped(self, text, font, width, x, y, leading, colour=INK):
+        """Greedy word wrap measured with the real font; returns bottom y."""
+        words = text.split()
+        lines, cur = [], ""
+        for w in words:
+            trial = (cur + " " + w).strip()
+            if self.d.textlength(trial, font=font) <= width or not cur:
+                cur = trial
+            else:
+                lines.append(cur)
+                cur = w
+        if cur:
             lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
-    return lines
+        for line in lines:
+            self.d.text((x, y), line, font=font, fill=colour)
+            y += leading
+        return y
+
+    def save(self):
+        out = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
+        os.makedirs(out, exist_ok=True)
+        self.img.save(os.path.join(out, "entry.png"))
 
 
-def para(d, x, y, text, f, color, width, leading, max_lines=None):
-    """Draw wrapped paragraph; return y below the last line. When
-    max_lines is set, never draw more than that many lines."""
-    lines = wrap_text(d, text, f, width)
-    if max_lines is not None:
-        lines = lines[:max_lines]
-    for line in lines:
-        d.text((x, y), line, font=f, fill=color)
-        y += leading
+# ---------------------------------------------------------------- stories
+
+LEAD = {
+    "kicker": "AMERICAS",
+    "head": "Thanksgiving storm slams the US East Coast",
+    "body": ("New York postpones the 100th Macy's parade to Saturday, the first "
+             "weather postponement in its history. The nor'easter knocks out "
+             "power for more than 250,000 customers and cancels hundreds of "
+             "flights."),
+}
+
+SMALL = [
+    {
+        "kicker": "EUROPE",
+        "head": "Zelenskyy warns of new strikes on power grid",
+        "body": ("Russia is preparing a new massive attack, Kyiv says. EU leaders "
+                 "split over a 45bn euro loan."),
+        "art": "pylons",
+    },
+    {
+        "kicker": "ASIA",
+        "head": "Fire engulfs Bangkok oil refinery",
+        "body": ("Blast at the Bangchak plant injures 9, three critically. All units "
+                 "shut down; the cause is under investigation."),
+        "art": "refinery",
+    },
+    {
+        "kicker": "MIDDLE EAST",
+        "head": "Two Italians killed in drone attack in Kuwait",
+        "body": ("Drones blamed on Iran hit an air-defence station; Tehran denies "
+                 "it. A tanker fire near Cairo kills 31."),
+        "art": "tanker",
+    },
+    {
+        "kicker": "TRADE",
+        "head": "US proposes tariffs of up to 35% on Vietnam",
+        "body": ("The levy falls to 20% if a trade deal is struck. Hanoi races to "
+                 "finish talks before a final decision."),
+        "art": "ship",
+    },
+]
+
+FOOTER_BOLD = ("ALSO TODAY  \u2014  NEW ZEALAND: Final election count due; "
+               "centre-right leads 67 of 131 seats.")
+FOOTER_PLAIN = ("SPORT: Steelers release quarterback Aaron Rodgers; Jannik Sinner "
+                "out of the Australian Open after knee surgery.")
+
+
+# ------------------------------------------------------------ illustrations
+
+def flame(d, cx, base, w, h):
+    """A small two-tone flame, point up from (cx, base)."""
+    d.polygon([(cx - w, base), (cx, base - h), (cx + w, base)],
+              fill=(255, 176, 32))
+    d.polygon([(cx - w * 0.45, base), (cx, base - h * 0.55),
+               (cx + w * 0.45, base)], fill=(255, 232, 120))
+
+
+def storm_skyline(d, x, y, w, h):
+    sky = (38, 54, 92)
+    d.rectangle([x, y, x + w, y + h], fill=sky)
+    # low cloud banks
+    for cx, cy, cw, ch in [(0.16, 0.10, 0.42, 0.16), (0.58, 0.06, 0.40, 0.15),
+                           (0.38, 0.22, 0.34, 0.13)]:
+        d.ellipse([x + cx * w, y + cy * h, x + (cx + cw) * w,
+                   y + (cy + ch) * h], fill=(52, 66, 104))
+    # lightning bolt
+    bx, by = x + 0.24 * w, y + 0.12 * h
+    d.line([(bx, by), (bx - 12, by + 52), (bx + 4, by + 52),
+            (bx - 16, by + 118)], fill=(255, 232, 90), width=4)
+    # rain: long slanted streaks spread over the upper sky
+    for i in range(18):
+        rx = x + ((i * 53) % 97) / 100.0 * w
+        ry = y + ((i * 29) % 40) / 100.0 * h + 12
+        d.line([(rx, ry), (rx - 8, ry + 20)], fill=(150, 170, 210), width=2)
+    # rooftops with lit windows
+    base = y + h
+    blocks = [(0.00, 0.62, 0.13, 0.38), (0.11, 0.55, 0.12, 0.45),
+              (0.21, 0.66, 0.15, 0.34), (0.34, 0.50, 0.13, 0.50),
+              (0.45, 0.64, 0.14, 0.36), (0.57, 0.56, 0.12, 0.44),
+              (0.67, 0.68, 0.16, 0.32), (0.81, 0.60, 0.19, 0.40)]
+    for bx0, by0, bw, bh in blocks:
+        d.rectangle([x + bx0 * w, y + by0 * h, x + (bx0 + bw) * w, base],
+                    fill=(16, 18, 30))
+    lit = [(0.03, 0.70), (0.14, 0.62), (0.17, 0.78), (0.25, 0.72),
+           (0.30, 0.85), (0.37, 0.58), (0.42, 0.74), (0.50, 0.70),
+           (0.55, 0.84), (0.60, 0.63), (0.64, 0.80), (0.71, 0.74),
+           (0.76, 0.86), (0.84, 0.68), (0.89, 0.82), (0.94, 0.72)]
+    for wx, wy in lit:
+        d.rectangle([x + wx * w, y + wy * h, x + wx * w + 9, y + wy * h + 9],
+                    fill=(255, 214, 90))
+
+
+def pylons(d, x, y, w, h):
+    d.rectangle([x, y, x + w, y + h], fill=(58, 62, 84))
+    d.rectangle([x, y + h * 0.72, x + w, y + h], fill=(74, 60, 78))
+    # sagging wires
+    for wy in (0.18, 0.30, 0.42):
+        pts = [(x + i * w / 12, y + wy * h + 7 * ((i - 6) ** 2) / 36)
+               for i in range(13)]
+        d.line(pts, fill=(28, 30, 44), width=2)
+    # two lattice towers
+    for tx, th in [(0.16, 0.62), (0.60, 0.78)]:
+        cx = x + tx * w
+        top = y + (1 - th) * h
+        foot = y + h
+        d.line([(cx - 26, foot), (cx, top), (cx + 26, foot)],
+               fill=(18, 18, 26), width=5)
+        d.line([(cx - 34, top + 16), (cx + 34, top + 16)],
+               fill=(18, 18, 26), width=5)
+        d.line([(cx - 22, top + 34), (cx + 22, top + 34)],
+               fill=(18, 18, 26), width=4)
+        d.line([(cx - 26, foot), (cx + 26, foot)], fill=(18, 18, 26), width=4)
+
+
+def refinery(d, x, y, w, h):
+    d.rectangle([x, y, x + w, y + h], fill=(26, 22, 30))
+    d.rectangle([x, y + h * 0.58, x + w, y + h], fill=(196, 84, 32))
+    # smoke puffs
+    for cx in (0.22, 0.52, 0.80):
+        d.ellipse([x + cx * w - 26, y + 6, x + cx * w + 26, y + 22],
+                  fill=(96, 92, 96))
+    base = y + h
+    for bx0, bw, bh in [(0.02, 0.13, 0.42), (0.20, 0.10, 0.55),
+                        (0.34, 0.14, 0.38), (0.52, 0.12, 0.50),
+                        (0.68, 0.15, 0.44), (0.86, 0.12, 0.36)]:
+        d.rectangle([x + bx0 * w, base - bh * h, x + (bx0 + bw) * w, base],
+                    fill=(12, 12, 16))
+    # stack with flame
+    sx = x + 0.27 * w
+    d.rectangle([sx - 3, y + h * 0.18, sx + 3, base - 0.55 * h],
+                fill=(12, 12, 16))
+    flame(d, sx, y + h * 0.20, 11, 26)
+
+
+def tanker(d, x, y, w, h):
+    d.rectangle([x, y, x + w, y + h], fill=(216, 178, 118))
+    d.ellipse([x + w * 0.72, y + h * 0.10, x + w * 0.88, y + h * 0.30],
+              fill=(240, 214, 150))
+    d.rectangle([x, y + h * 0.74, x + w, y + h], fill=(74, 58, 44))
+    # tank body and cab
+    tx, ty = x + w * 0.06, y + h * 0.42
+    d.rounded_rectangle([tx, ty, tx + w * 0.58, ty + h * 0.30],
+                        radius=12, fill=(232, 232, 228))
+    d.polygon([(tx + w * 0.58, ty), (tx + w * 0.74, ty),
+               (tx + w * 0.80, ty + h * 0.30), (tx + w * 0.58, ty + h * 0.30)],
+              fill=(178, 44, 36))
+    flame(d, tx + w * 0.30, ty + 2, 10, 24)
+    for wx in (0.14, 0.32, 0.50, 0.68):
+        d.ellipse([x + wx * w - 9, y + h * 0.76, x + wx * w + 9,
+                   y + h * 0.76 + 18], fill=(24, 22, 20))
+
+
+def ship(d, x, y, w, h):
+    d.rectangle([x, y, x + w, y + h], fill=(178, 208, 224))
+    for i in range(5):
+        yy = y + h * (0.52 + i * 0.11)
+        d.line([(x, yy), (x + w, yy)], fill=(120, 160, 190), width=2)
+    # hull
+    d.polygon([(x + w * 0.02, y + h * 0.58), (x + w * 0.97, y + h * 0.58),
+               (x + w * 0.88, y + h * 0.86), (x + w * 0.10, y + h * 0.86)],
+              fill=(22, 44, 84))
+    # containers
+    cols = [(196, 64, 48), (36, 96, 168), (224, 176, 48),
+            (48, 148, 84), (228, 228, 228)]
+    for i, c in enumerate(cols):
+        cx0 = x + w * (0.06 + i * 0.185)
+        d.rectangle([cx0, y + h * 0.34, cx0 + w * 0.165, y + h * 0.58],
+                    fill=c)
+    # funnel
+    d.rectangle([x + w * 0.86, y + h * 0.40, x + w * 0.92, y + h * 0.58],
+                fill=(240, 240, 236))
+
+
+ART = {"pylons": pylons, "refinery": refinery, "tanker": tanker,
+       "ship": ship}
+
+
+# ------------------------------------------------------------------- layout
+
+def masthead(p):
+    d, t = p.d, p.t
+    d.rectangle([0, 0, PAGE, 94], fill=NAVY)
+    # globe: circle, meridians and parallels
+    gx, gy, r = 66, 47, 30
+    d.ellipse([gx - r, gy - r, gx + r, gy + r], outline=(247, 241, 227),
+              width=3)
+    d.ellipse([gx - 12, gy - r, gx + 12, gy + r],
+              outline=(247, 241, 227), width=2)
+    d.line([(gx - r, gy), (gx + r, gy)], fill=(247, 241, 227), width=2)
+    d.arc([gx - r, gy - 16, gx + r, gy + 16], 200, 340,
+          fill=(247, 241, 227), width=2)
+    d.arc([gx - r, gy - 16, gx + r, gy + 16], 20, 160,
+          fill=(247, 241, 227), width=2)
+    title = t.serif(62)
+    d.text((112, 14), "THE WORLD TODAY", font=title, fill=(247, 241, 227))
+    num = t.sans(20)
+    d.text((1000, 36), "No. 331", font=num, fill=(247, 241, 227),
+           anchor="ra")
+    d.rectangle([0, 94, PAGE, 99], fill=GOLD)
+    p.y = 99
+
+
+def dateline(p):
+    d, t = p.d, p.t
+    font = t.sans_b(34)
+    d.text((PAGE // 2, 112), "FRIDAY  27  NOVEMBER  2026", font=font,
+           fill=RED, anchor="ma")
+    p.rule(MARGIN, PAGE - MARGIN, 152, width=2)
+    p.y = 164
+
+
+def lead_story(p):
+    d, t = p.d, p.t
+    ix, iy, iw, ih = MARGIN, p.y, 470, 300
+    storm_skyline(d, ix, iy, iw, ih)
+    tx = ix + iw + 16
+    tw = PAGE - MARGIN - tx
+    y = iy + 4
+    d.text((tx, y), LEAD["kicker"], font=t.sans_b(20), fill=RED)
+    y += 30
+    y = p.wrapped(LEAD["head"], t.serif(42), tw, tx, y, 48)
+    y += 6
+    p.wrapped(LEAD["body"], t.sans(20), tw, tx, y, 26)
+    p.y = iy + ih + 14
+    p.rule(MARGIN, PAGE - MARGIN, p.y, width=2)
+    p.y += 14
+
+
+def small_story(p, story, x, y, w):
+    d, t = p.d, p.t
+    ART[story["art"]](d, x, y, w, 76)
+    y += 84
+    d.text((x, y), story["kicker"], font=t.sans_b(19), fill=RED)
+    y += 22
+    y = p.wrapped(story["head"], t.serif(28), w, x, y, 30)
+    y = p.wrapped(story["body"], t.sans(17), w, x, y + 3, 21)
     return y
 
 
-def kicker(d, x, y, label, color=RED):
-    """Small red region label; return y below it."""
-    d.text((x, y), label, font=sans_b(18), fill=color)
-    return y + 25
-
-
-# ------------------------------------------------------------------ art
-
-def art_storm(d, x0, y0, w, h):
-    """Nor'easter over a city: darkening sky, cloud bank, rain, lit
-    windows, one fork of lightning."""
-    steps = 20
-    for i in range(steps):
-        t = i / (steps - 1)
-        col = tuple(int(NAVY2[c] + (NAVY[c] - NAVY2[c]) * t) for c in range(3))
-        d.rectangle([x0, y0 + i * h // steps, x0 + w,
-                     y0 + (i + 1) * h // steps], fill=col)
-    # cloud bank (kept inside the frame)
-    for cx, cy, rx, ry in ((0.20, 0.16, 0.17, 0.08), (0.55, 0.10, 0.22, 0.09),
-                           (0.84, 0.18, 0.13, 0.07), (0.40, 0.24, 0.14, 0.06)):
-        d.ellipse([x0 + (cx - rx) * w, y0 + (cy - ry) * h,
-                   x0 + (cx + rx) * w, y0 + (cy + ry) * h], fill=(50, 60, 82))
-    # lightning
-    bolt = [(0.30, 0.14), (0.22, 0.40), (0.28, 0.40),
-            (0.18, 0.66), (0.28, 0.38), (0.22, 0.38)]
-    d.polygon([(x0 + bx * w, y0 + by * h) for bx, by in bolt],
-              fill=(248, 216, 76))
-    # rain strokes, fixed pattern
-    for i in range(52):
-        rx = x0 + ((i * 89) % 100) / 100.0 * w
-        ry = y0 + h * 0.28 + ((i * 47) % 100) / 100.0 * h * 0.60
-        d.line([rx, ry, rx - 6, ry + 14], fill=(148, 168, 204), width=2)
-    # skyline
-    base = y0 + h
-    towers = [(0.00, 0.55, 0.12, 0.27), (0.12, 0.66, 0.10, 0.16),
-              (0.22, 0.50, 0.12, 0.32), (0.34, 0.60, 0.11, 0.22),
-              (0.45, 0.46, 0.12, 0.36), (0.57, 0.62, 0.10, 0.20),
-              (0.67, 0.52, 0.12, 0.30), (0.79, 0.66, 0.10, 0.16),
-              (0.89, 0.58, 0.11, 0.24)]
-    for bx, by, bw, bh in towers:
-        d.rectangle([x0 + bx * w, y0 + by * h,
-                     x0 + (bx + bw) * w, base], fill=(14, 20, 34))
-        for wx in range(2):
-            for wy in range(3):
-                if (int(bx * 100) + wx * 5 + wy * 2) % 3 == 0:
-                    d.rectangle(
-                        [x0 + (bx + 0.025 + wx * 0.05) * w,
-                         y0 + (by + 0.04 + wy * 0.10) * h,
-                         x0 + (bx + 0.05 + wx * 0.05) * w,
-                         y0 + (by + 0.075 + wy * 0.10) * h],
-                        fill=(248, 216, 76))
-    d.rectangle([x0, base - 3, x0 + w, base], fill=(14, 20, 34))
-
-
-def art_pylon(d, x0, y0, w, h):
-    """Electricity pylon against a grey dusk sky."""
-    for i in range(10):
-        t = i / 9
-        shade = int(88 - 52 * t)
-        d.rectangle([x0, y0 + i * h // 10, x0 + w,
-                     y0 + (i + 1) * h // 10],
-                    fill=(shade, shade + 7, shade + 22))
-    d.rectangle([x0, y0 + h * 0.80, x0 + w, y0 + h], fill=(104, 90, 100))
-    cx = x0 + w * 0.68
-    top, bot = y0 + h * 0.08, y0 + h
-    d.polygon([(cx - 4, top), (cx + 4, top), (cx + 26, bot), (cx + 12, bot)],
-              fill=INK)
-    d.polygon([(cx - 4, top), (cx + 4, top), (cx - 12, bot), (cx - 26, bot)],
-              fill=INK)
-    for ay in (0.18, 0.34):
-        yy = y0 + h * ay
-        d.rectangle([cx - w * 0.22, yy - 3, cx + w * 0.22, yy + 3], fill=INK)
-        d.line([x0, yy + 12, cx - w * 0.22, yy + 4], fill=INK, width=2)
-        d.line([cx + w * 0.22, yy + 4, x0 + w, yy + 12], fill=INK, width=2)
-    # smaller pylon in the distance
-    cx2 = x0 + w * 0.16
-    d.polygon([(cx2 - 3, y0 + h * 0.38), (cx2 + 3, y0 + h * 0.38),
-               (cx2 + 11, bot), (cx2 + 4, bot)], fill=(42, 42, 46))
-    d.polygon([(cx2 - 3, y0 + h * 0.38), (cx2 + 3, y0 + h * 0.38),
-               (cx2 - 4, bot), (cx2 - 11, bot)], fill=(42, 42, 46))
-    d.rectangle([cx2 - w * 0.09, y0 + h * 0.44,
-                 cx2 + w * 0.09, y0 + h * 0.44 + 3], fill=(42, 42, 46))
-
-
-def art_refinery(d, x0, y0, w, h):
-    """Refinery towers, smoke and flame at night."""
-    d.rectangle([x0, y0, x0 + w, y0 + h], fill=(36, 32, 38))
-    # heat glow at the base
-    for i in range(9):
-        t = i / 8
-        d.rectangle([x0, y0 + h - (i + 1) * h // 20, x0 + w,
-                     y0 + h - i * h // 20],
-                    fill=(196 - int(84 * t), 88 - int(38 * t), 28))
-    # smoke
-    for sx, sy, sr in ((0.30, 0.10, 0.08), (0.52, 0.07, 0.09),
-                       (0.74, 0.12, 0.07)):
-        d.ellipse([x0 + (sx - sr) * w, y0 + (sy - sr) * h,
-                   x0 + (sx + sr) * w, y0 + (sy + sr) * h],
-                  fill=(118, 114, 116))
-    # towers
-    for tx, tw, th in ((0.08, 0.11, 0.58), (0.24, 0.13, 0.74),
-                       (0.44, 0.10, 0.52), (0.60, 0.14, 0.66),
-                       (0.80, 0.10, 0.46)):
-        d.rectangle([x0 + tx * w, y0 + h * (1 - th),
-                     x0 + (tx + tw) * w, y0 + h], fill=(18, 16, 20))
-        d.rectangle([x0 + tx * w, y0 + h * (1 - th) - 5,
-                     x0 + (tx + tw) * w, y0 + h * (1 - th)],
-                    fill=(58, 54, 58))
-    # flame on the tallest tower
-    fx, fy = x0 + w * 0.305, y0 + h * 0.28
-    d.polygon([(fx - 12, fy + 14), (fx, fy - 12), (fx + 12, fy + 14)],
-              fill=(246, 158, 38))
-    d.polygon([(fx - 6, fy + 14), (fx, fy + 2), (fx + 6, fy + 14)],
-              fill=(248, 216, 76))
-
-
-def art_tanker(d, x0, y0, w, h):
-    """Fuel tanker on a desert road at dusk, flame above the tank."""
-    d.rectangle([x0, y0, x0 + w, y0 + h * 0.60], fill=(212, 156, 90))
-    d.ellipse([x0 + w * 0.76, y0 + h * 0.08,
-               x0 + w * 0.90, y0 + h * 0.32], fill=(240, 192, 112))
-    d.rectangle([x0, y0 + h * 0.60, x0 + w, y0 + h], fill=(166, 126, 82))
-    d.rectangle([x0, y0 + h * 0.78, x0 + w, y0 + h], fill=(58, 54, 50))
-    ty = y0 + h * 0.48
-    d.rounded_rectangle([int(x0 + w * 0.10), int(ty), int(x0 + w * 0.58),
-                         int(ty + h * 0.26)], radius=9, fill=(204, 204, 200))
-    d.rectangle([x0 + w * 0.10, ty + h * 0.09,
-                 x0 + w * 0.58, ty + h * 0.13], fill=(168, 168, 164))
-    d.polygon([(x0 + w * 0.58, ty + h * 0.03), (x0 + w * 0.68, ty + h * 0.03),
-               (x0 + w * 0.73, ty + h * 0.26), (x0 + w * 0.58, ty + h * 0.26)],
-              fill=(168, 38, 28))
-    for wx in (0.16, 0.32, 0.44):
-        d.ellipse([x0 + w * wx, ty + h * 0.24,
-                   x0 + w * (wx + 0.05), ty + h * 0.36], fill=INK)
-    d.ellipse([x0 + w * 0.64, ty + h * 0.24,
-               x0 + w * 0.69, ty + h * 0.36], fill=INK)
-    fx, fy = x0 + w * 0.34, ty - h * 0.10
-    d.polygon([(fx - 14, fy + 12), (fx, fy - 16), (fx + 14, fy + 12)],
-              fill=(246, 158, 38))
-    d.polygon([(fx - 6, fy + 12), (fx, fy - 2), (fx + 6, fy + 12)],
-              fill=(248, 216, 76))
-
-
-def art_ship(d, x0, y0, w, h):
-    """Container ship on the sea under a pale sky."""
-    d.rectangle([x0, y0, x0 + w, y0 + h * 0.52], fill=(194, 212, 226))
-    d.rectangle([x0, y0 + h * 0.52, x0 + w, y0 + h], fill=(42, 82, 118))
-    for wy in (0.60, 0.72, 0.84):
-        d.line([x0, y0 + h * wy, x0 + w, y0 + h * wy],
-               fill=(118, 158, 188), width=2)
-    d.polygon([(x0 + w * 0.05, y0 + h * 0.60), (x0 + w * 0.95, y0 + h * 0.60),
-               (x0 + w * 0.87, y0 + h * 0.80), (x0 + w * 0.13, y0 + h * 0.80)],
-              fill=(28, 42, 64))
-    cols = [(198, 68, 48), (38, 108, 158), (218, 158, 38), (58, 138, 88)]
-    for i, col in enumerate(cols):
-        cx = x0 + w * (0.13 + i * 0.19)
-        d.rectangle([cx, y0 + h * 0.38, cx + w * 0.16, y0 + h * 0.60],
-                    fill=col)
-        d.rectangle([cx, y0 + h * 0.38, cx + w * 0.16, y0 + h * 0.42],
-                    fill=(252, 252, 248))
-    d.rectangle([x0 + w * 0.87, y0 + h * 0.32,
-                 x0 + w * 0.94, y0 + h * 0.60], fill=(238, 238, 234))
-
-
-def art_globe(d, cx, cy, r):
-    """Small line-art globe for the masthead."""
-    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=(250, 246, 236),
-              width=3)
-    d.ellipse([cx - r * 0.45, cy - r, cx + r * 0.45, cy + r],
-              outline=(250, 246, 236), width=2)
-    d.line([cx - r, cy, cx + r, cy], fill=(250, 246, 236), width=2)
-    d.arc([cx - r, cy - r * 0.55, cx + r, cy + r * 0.55],
-          start=200, end=340, fill=(250, 246, 236), width=2)
-    d.arc([cx - r, cy - r * 0.55, cx + r, cy + r * 0.55],
-          start=20, end=160, fill=(250, 246, 236), width=2)
-
-
-# ------------------------------------------------------------------ page
-
-def grid_story(d, x, y, w, art, region, headline, body):
-    """One grid story: art strip, kicker, headline, two body lines."""
-    art(d, x, y, w, 80)
-    y += 88
-    y = kicker(d, x, y, region)
-    y = para(d, x, y, headline, serif_b(24), INK, w, 28)
-    y += 2
-    para(d, x, y, body, sans(17), BODY, w, 20, max_lines=2)
+def footer(p):
+    d, t = p.d, p.t
+    p.rule(MARGIN, PAGE - MARGIN, p.y, width=2)
+    y = p.y + 8
+    y = p.wrapped(FOOTER_BOLD, t.sans_b(16), PAGE - 2 * MARGIN,
+                  MARGIN, y, 20)
+    p.wrapped(FOOTER_PLAIN, t.sans(16), PAGE - 2 * MARGIN, MARGIN, y + 2, 20)
 
 
 def main():
-    img = Image.new("RGB", (W, H), PAPER)
-    d = ImageDraw.Draw(img)
-
-    # ---- masthead
-    d.rectangle([0, 0, W, 96], fill=NAVY)
-    art_globe(d, 78, 48, 26)
-    d.text((122, 48), "THE WORLD TODAY", font=serif_b(56),
-           fill=(250, 246, 236), anchor="lm")
-    d.text((W - 24, 48), "No. 331", font=sans(20),
-           fill=(200, 196, 180), anchor="rm")
-    d.rectangle([0, 96, W, 100], fill=GOLD)
-
-    # ---- date bar
-    d.text((W // 2, 122), "FRIDAY  27  NOVEMBER  2026", font=sans_b(30),
-           fill=RED, anchor="mm")
-    d.line([24, 146, W - 24, 146], fill=INK, width=2)
-
-    # ---- lead story: Thanksgiving storm
-    art_storm(d, 24, 158, 470, 306)
-    lx = 518
-    y = 164
-    y = kicker(d, lx, y, "AMERICAS")
-    y = para(d, lx, y, "Thanksgiving storm slams the US East Coast",
-             serif_b(38), INK, 482, 46)
-    y += 8
-    para(d, lx, y,
-         "New York postpones the 100th Macy's parade to Saturday, the "
-         "first weather postponement in its history. The nor'easter "
-         "knocks out power for more than 250,000 customers and cancels "
-         "hundreds of flights.",
-         sans(21), BODY, 482, 27)
-    d.line([24, 480, W - 24, 480], fill=INK, width=2)
-
-    # ---- grid row 1
-    grid_story(d, 24, 494, 476, art_pylon, "EUROPE",
-               "Zelenskyy warns of new strikes on power grid",
-               "Russia is preparing a new massive attack, Kyiv says. "
-               "EU leaders split over a 45bn euro loan.")
-    grid_story(d, 524, 494, 476, art_refinery, "ASIA",
-               "Fire engulfs Bangkok oil refinery",
-               "Blast at the Bangchak plant injures 9, three critically. "
-               "All units shut down; the cause is under investigation.")
-    d.line([24, 712, W - 24, 712], fill=FAINT, width=1)
-
-    # ---- grid row 2
-    grid_story(d, 24, 726, 476, art_tanker, "MIDDLE EAST",
-               "Two Italians killed in drone attack in Kuwait",
-               "Drones blamed on Iran hit an air-defence station; Tehran "
-               "denies it. A tanker fire near Cairo kills 31.")
-    grid_story(d, 524, 726, 476, art_ship, "TRADE",
-               "US proposes tariffs of up to 35% on Vietnam",
-               "The levy falls to 20% if a trade deal is struck. Hanoi "
-               "races to finish talks before a final decision.")
-    d.line([24, 944, W - 24, 944], fill=INK, width=2)
-
-    # ---- footer: New Zealand + sport
-    d.text((24, 954),
-           "ALSO TODAY  \u2014  NEW ZEALAND: Final election count due; the "
-           "centre-right coalition leads 67 of 131 seats.",
-           font=sans_b(15), fill=INK)
-    d.text((24, 976),
-           "SPORT: Steelers release quarterback Aaron Rodgers; Jannik Sinner "
-           "out of the Australian Open after knee surgery.",
-           font=sans(14), fill=BODY)
-
-    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-    os.makedirs(out_dir, exist_ok=True)
-    img.save(os.path.join(out_dir, "entry.png"), format="PNG")
+    p = Page()
+    masthead(p)
+    dateline(p)
+    lead_story(p)
+    col_w = (PAGE - 2 * MARGIN - 36) // 2
+    left, right = MARGIN, MARGIN + col_w + 36
+    y2 = p.y
+    end_l = small_story(p, SMALL[0], left, y2, col_w)
+    end_r = small_story(p, SMALL[1], right, y2, col_w)
+    p.y = max(end_l, end_r) + 10
+    p.rule(MARGIN, PAGE - MARGIN, p.y, width=1, colour=FAINT)
+    p.y += 10
+    y3 = p.y
+    end_l = small_story(p, SMALL[2], left, y3, col_w)
+    end_r = small_story(p, SMALL[3], right, y3, col_w)
+    p.y = max(end_l, end_r) + 6
+    footer(p)
+    p.save()
 
 
 if __name__ == "__main__":
