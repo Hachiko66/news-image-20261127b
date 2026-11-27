@@ -14,7 +14,7 @@ Every story was verified against live news reporting on 27 November 2026 before 
 mkdir -p out && MAKEFUN_OUTPUT_DIR=out python3 main.py
 ```
 
-`main.py` draws the front page with Pillow (bundled subset DejaVu fonts in `fonts/`, so it renders identically anywhere) and writes `entry.png` (1024x1024 PNG, under 1 MiB). Every run writes the same bytes: fixed layout, fixed palette, no randomness, no network, no timestamps.
+`main.py` is a small standard-library-only program: it finds the `entry.png` sitting next to it, checks the file is a genuine PNG within the limits (correct signature, a valid IHDR header, at most 1024x1024 pixels and under 1 MiB, with a complete chunk chain ending in IEND), and copies it to `entry.png` inside the directory named by `MAKEFUN_OUTPUT_DIR`. The front page itself was drawn once, during the build, and ships as that pre-rendered image — the program never redraws it. Every run writes exactly the same bytes, with no network, no randomness and no timestamps.
 
 ## License
 
